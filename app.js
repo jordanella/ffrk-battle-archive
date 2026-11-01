@@ -103,9 +103,14 @@
   // ----- LOCATIONS of a category
   function encounterList(battles) {
     return '<div class="encs">' + battles.map(function (b, i) {
-      return '<a class="enc" href="#/battle/' + b.id + '"><b>' + esc(b.name || ("Battle " + (i + 1))) + "</b>" + (b.boss ? " " + badge("boss") : "") +
+      return '<a class="enc' + (b.uncaptured ? " uncaptured" : "") + '" href="#/battle/' + b.id + '"><b>' + esc(b.name || ("Battle " + (i + 1))) + "</b>" +
+        (b.boss ? " " + badge("boss") : "") + (b.uncaptured ? " " + badge("capture", "needs capture") : "") +
         "<small>" + esc(b.enemies.join(", ")) + "</small></a>";
     }).join("") + "</div>";
+  }
+  function needCount(d) {
+    var n = d ? d.battles.filter(function (b) { return b.uncaptured; }).length : 0;
+    return n ? " " + badge("capture", n === d.battles.length ? "needs capture" : n + " of " + d.battles.length + " battles need capturing") : "";
   }
   function realmPage(index, id, focus) {
     var r = (index.realms || []).filter(function (x) { return x.id === id; })[0];
@@ -117,7 +122,7 @@
         var d = l[diff] || l.classic || l.elite;
         return '<div class="card loc' + (focus === l.id ? " focus" : "") + '" id="loc-' + l.id + '"><div class="loc-head"><b>' + esc(l.name) + "</b>" +
           (d ? ' <span class="muted">Lv ' + esc(d.level) + " · stamina " + esc(d.stamina) + "</span>" : "") +
-          (l[diff] ? "" : ' <span class="muted">(no ' + diff + " version)</span>") + "</div>" +
+          (l[diff] ? "" : ' <span class="muted">(no ' + diff + " version)</span>") + needCount(d) + "</div>" +
           (d ? '<div class="prov">' + esc(d.layout) + ' <button class="stagebtn mapbtn" data-d="' + esc(d.id) + '">Map</button></div><div class="maphold"></div>' +
             encounterList(d.battles) : "") + "</div>";
       }).join("");
@@ -188,7 +193,8 @@
           }).join("") + "</div></div>";
       }).join("");
       app.innerHTML = crumbs(encounterTrail(b).concat([[null, w.name || b.battle_name || "Encounter"]])) +
-        "<h1>" + esc(w.name || b.battle_name || b.enemies.join(", ")) + " " + badge(b.provenance.kind) + "</h1>" +
+        "<h1>" + esc(w.name || b.battle_name || b.enemies.join(", ")) + " " + badge(b.provenance.kind) +
+        (b.layout_known === false ? " " + badge("capture", "needs capture") : "") + "</h1>" +
         '<p class="prov">' + esc(b.provenance.about) + (b.provenance.source ? " · source: " + esc(b.provenance.source) : "") + "</p>" +
         (b.layout_known === false ? '<div class="card"><b>Layout not captured yet</b><p class="small">The battle\u2019s name and place in the dungeon are real; ' +
           "its rounds and enemies are not known, so none are shown rather than guessed.</p>" +

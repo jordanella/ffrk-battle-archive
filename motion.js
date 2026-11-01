@@ -820,7 +820,7 @@
   function dungeonMap(holder, d, helpers) {
     H = helpers;
     var esc = H.esc, plats = [{ exit: true, name: "Exit" }].concat(d.battles.map(function (b, i) {
-      return { name: b.name || ("Battle " + (i + 1)), boss: !!b.boss, stamina: b.stamina, id: b.id };
+      return { name: b.name || ("Battle " + (i + 1)), boss: !!b.boss, stamina: b.stamina, id: b.id, uncaptured: !!b.uncaptured };
     }));
     var x = 0, y = 0, n = 0;
     plats.forEach(function (pf, g) {
@@ -856,7 +856,8 @@
       var col = pf.boss ? "rgba(196,61,47," : pf.exit ? "rgba(128,128,128," : "rgba(47,91,211,";
       ctx.beginPath(); ctx.ellipse(pf.x, pf.y, w / 2, hh / 2, 0, 0, Math.PI * 2);
       ctx.fillStyle = bgc; ctx.fill();
-      ctx.fillStyle = col + ".28)"; ctx.fill(); ctx.strokeStyle = col + ".9)"; ctx.stroke();
+      ctx.fillStyle = col + ".28)"; ctx.fill(); ctx.strokeStyle = col + ".9)";
+      ctx.setLineDash(pf.uncaptured ? [5, 4] : []); ctx.stroke(); ctx.setLineDash([]);
     });
     // names and stamina as page text over the drawing: names wrap instead of being cut, and link to the battle
     var wrap = document.createElement("div");
@@ -894,7 +895,7 @@
     holder.innerHTML = "";
     holder.appendChild(wrap);
     holder.insertAdjacentHTML("beforeend", '<p class="prov">Platforms placed by the game\u2019s own rule (exit at the bottom, climbing up); ' +
-      "each badge is the battle\u2019s stamina cost. " +
+      "each badge is the battle\u2019s stamina cost; a dashed platform is a battle whose layout hasn\u2019t been captured. " +
       "Platform style " + esc(m.platform_style || "") + ' (<a class="mono" href="' + link(m.platform_scene || "") + '">' + esc(baseName(m.platform_scene || "")) + "</a>)" +
       (m.background ? ' · background picture <span class="mono">' + esc(m.background) + "</span>" : "") + "</p>");
   }

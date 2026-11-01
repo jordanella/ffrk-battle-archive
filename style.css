@@ -173,3 +173,6 @@ table.parts td { vertical-align: top; }
 .dlabel { position: absolute; font-size: 13px; line-height: 1.25; color: var(--ink); text-decoration: none; }
 .dlabel:hover { color: var(--accent); text-decoration: underline; }
 .dlabel.dboss { font-weight: 600; }
+
+.badge.capture { background: transparent; color: var(--rebuilt); border: 1px dashed var(--rebuilt); }
+.enc.uncaptured { border-style: dashed; }
