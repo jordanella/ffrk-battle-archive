@@ -1,0 +1,1 @@
+{"kind": "states", "start": "10", "states": [{"id": "10", "behaviour": "DoNothingState", "form": "", "next": ["11"], "hooks": []}, {"id": "11", "behaviour": "InterruptMultipleAbility", "form": "", "next": ["10"], "hooks": []}], "script_hooks": [], "helpers": [{"name": "", "logic": "Do: FF's 'ns''s 'battle'."}], "id": "5"}

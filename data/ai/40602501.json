@@ -1,0 +1,1 @@
+{"kind": "states", "start": "11", "states": [{"id": "11", "behaviour": "InterruptAbility", "form": "", "next": ["21"], "hooks": []}, {"id": "12", "behaviour": "SimpleState", "form": "", "next": [], "hooks": []}, {"id": "21", "behaviour": "InterruptAbility", "form": "", "next": ["12"], "hooks": []}], "script_hooks": [], "helpers": [], "id": "40602501"}

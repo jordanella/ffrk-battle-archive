@@ -1,0 +1,1 @@
+{"kind": "template", "template": "Wave", "phases": [], "on_start": ["game.Conf.ABILITY_ID_OF.DEFORM_MULTI"], "on_death": [], "waves": null, "custom_helpers": [], "id": "2157440451"}

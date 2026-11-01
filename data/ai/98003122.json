@@ -1,0 +1,1 @@
+{"kind": "template", "template": "HpRateTransitionV2", "phases": [{"form": "21", "hp": null, "hp_setting": null, "stops": false, "forced": [], "on_enter": []}], "on_start": [], "on_death": [], "waves": null, "custom_helpers": [], "id": "98003122"}

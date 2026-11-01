@@ -1,0 +1,1 @@
+{"kind": "template", "template": "HpRateTransition", "phases": [{"form": "5", "hp": null, "hp_setting": null, "stops": false, "forced": [], "on_enter": []}, {"form": "6", "hp": null, "hp_setting": "ogre_mage_b_hp_rate_to_phase_2", "stops": false, "forced": [], "on_enter": []}], "on_start": [], "on_death": [], "waves": null, "custom_helpers": [], "id": "2027210103"}

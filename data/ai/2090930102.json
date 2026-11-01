@@ -1,0 +1,1 @@
+{"kind": "template", "template": "HpRateTransition", "phases": [{"form": "8", "hp": null, "hp_setting": null, "stops": false, "forced": [], "on_enter": []}, {"form": "9", "hp": null, "hp_setting": "steiner_hp_rate_to_weak", "stops": false, "forced": [], "on_enter": []}], "on_start": [], "on_death": [], "waves": null, "custom_helpers": [], "id": "2090930102"}
