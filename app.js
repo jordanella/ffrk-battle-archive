@@ -77,7 +77,7 @@
         .map(function (s) { return '<div class="stat"><b>' + s[1] + "</b><span>" + s[0] + "</span></div>"; }).join("") + "</div>" +
       '<div class="grid">' + types + "</div>" +
       '<p class="prov" style="margin-top:22px"><a href="#/motion">Motion library</a>: every animation the battles use, played as boxes from our picture-free motion scores. ' +
-      '<a href="#/wishlist">Capture wish-list</a>: the game files still needed to complete these battles.</p>';
+      '<a href="#/wishlist">Capture wish-list</a>: the battles, AI scripts and files still to be captured.</p>';
   }
 
   // ----- CATEGORIES of a type
@@ -279,7 +279,7 @@
     e.moves.forEach(function (m) { (m.animation && m.animation.files || []).forEach(function (f) { all.push(f.held); }); });
     var held = all.filter(Boolean).length;
     return '<p><b>' + held + " of " + all.length + " files held</b></p>" + bar(held, all.length) + sprite + moves +
-      '<p class="prov">"needed": a file no archive holds yet. Every needed file across the archive is on the <a href="#/wishlist">capture wish-list</a>.</p>';
+      '<p class="prov">"needed": a file no archive holds yet. Everything still needed is on the <a href="#/wishlist">capture wish-list</a>.</p>';
   }
   function completeData(e) {
     var rows = e.moves.filter(function (m) { return m.detail; }).map(function (m) {
@@ -297,17 +297,40 @@
   }
   function wishlist() {
     Promise.all([load("wishlist.json"), indexed()]).then(function (res) {
-      var list = res[0];
+      var w = res[0], layouts = w.layouts || [], ai = w.ai || [], files = w.files || [];
+      var nBattles = layouts.reduce(function (n, d) { return n + d.battles.length; }, 0);
+      var byRealm = {};
+      layouts.forEach(function (d) { (byRealm[d.realm] = byRealm[d.realm] || []).push(d); });
+      var realmsHtml = Object.keys(byRealm).map(function (realm) {
+        var ds = byRealm[realm], n = ds.reduce(function (k, d) { return k + d.battles.length; }, 0);
+        return "<details><summary><b>" + esc(realm) + '</b> <span class="muted">' + ds.length + " dungeons \u00b7 " + n + " battles</span></summary>" +
+          '<div class="scroll"><table><tr><th>Dungeon</th><th>Battles not captured</th><th>Monsters known</th></tr>' + ds.map(function (d) {
+            return '<tr><td><a href="#/realm/' + esc(d.realm_id) + "/" + esc(d.classic_id) + '">' + esc(d.dungeon) + "</a> <span class=\"muted\">" + esc(d.difficulty) + "</span></td><td>" +
+              d.battles.map(function (b) { return '<a href="#/battle/' + esc(b.id) + '">' + esc(b.name) + "</a>" + (b.boss ? " " + badge("boss") : ""); }).join("<br>") +
+              '</td><td class="small">' + esc(d.monsters.slice(0, 8).join(", ")) + (d.monsters.length > 8 ? " \u2026" : "") +
+              ' <span class="muted">(' + esc(d.monsters_known) + ")</span></td></tr>";
+          }).join("") + "</table></div></details>";
+      }).join("");
       app.innerHTML = crumbs([[null, "Capture wish-list"]]) + "<h1>Capture wish-list</h1>" +
-        '<p class="muted">Every game file the archive\u2019s battles name that no archive holds yet, with the encounters that need it. ' +
-        "Files at the top would each complete an encounter on their own. Paths are exactly what the game asked for.</p>" +
-        '<p class="prov">' + list.length + " files needed.</p>" +
-        '<div class="scroll"><table><tr><th>File</th><th>Kind</th><th class="num">Encounters</th><th class="num">Completes</th><th>Enemies</th></tr>' +
-        list.slice(0, 600).map(function (w) {
-          return '<tr><td class="mono">' + esc(w.path) + "</td><td>" + esc(w.kind) + '</td><td class="num">' +
-            w.encounters.slice(0, 3).map(function (id) { return '<a href="#/battle/' + id + '">' + esc((where[id] || {}).name || id) + "</a>"; }).join(", ") +
-            (w.encounter_count > 3 ? " +" + (w.encounter_count - 3) : "") + '</td><td class="num">' + (w.completes || "") + "</td><td>" + esc(w.enemies.slice(0, 4).join(", ")) + "</td></tr>";
-        }).join("") + "</table></div>" + (list.length > 600 ? '<p class="prov">First 600 shown.</p>' : "");
+        '<p class="muted">What a capture would add to the archive. Playing a battle with a capture running records all of it at once: ' +
+        "its rounds, its enemies with their stats and moves, and the files it names.</p>" +
+        "<h2>Battles not captured yet</h2>" +
+        '<p class="prov">' + nBattles + " battles in " + layouts.length + " story dungeons. Their names and places in each dungeon are known; " +
+        "which enemies appear in which round is not, so the archive shows none rather than guess.</p>" + realmsHtml +
+        "<h2>AI scripts</h2>" +
+        (ai.length ? '<p class="prov">' + ai.length + " AI scripts that battles name but no archive holds.</p>" +
+          '<div class="scroll"><table><tr><th>AI</th><th>Used by</th><th>Encounters</th></tr>' + ai.map(function (x) {
+            return '<tr><td class="mono">' + esc(x.ai_id) + "</td><td>" + esc(x.enemies.join(", ")) + "</td><td>" +
+              x.encounters.slice(0, 4).map(function (id) { return '<a href="#/battle/' + id + '">' + esc((where[id] || {}).name || id) + "</a>"; }).join(", ") + "</td></tr>";
+          }).join("") + "</table></div>" : '<p class="muted">None outstanding.</p>') +
+        "<h2>Game files</h2>" +
+        (files.length ? '<p class="prov">' + files.length + " files the battles name that no archive holds yet. Paths are exactly what the game asks for.</p>" +
+          '<div class="scroll"><table><tr><th>File</th><th>Kind</th><th class="num">Encounters</th><th class="num">Completes</th><th>Enemies</th></tr>' +
+          files.slice(0, 600).map(function (f) {
+            return '<tr><td class="mono">' + esc(f.path) + "</td><td>" + esc(f.kind) + '</td><td class="num">' +
+              f.encounters.slice(0, 3).map(function (id) { return '<a href="#/battle/' + id + '">' + esc((where[id] || {}).name || id) + "</a>"; }).join(", ") +
+              (f.encounter_count > 3 ? " +" + (f.encounter_count - 3) : "") + '</td><td class="num">' + (f.completes || "") + "</td><td>" + esc(f.enemies.slice(0, 4).join(", ")) + "</td></tr>";
+          }).join("") + "</table></div>" : '<p class="muted">None outstanding: every animation, background and texture file the captured battles name is held.</p>');
     });
   }
   function enemyPage(id, ri, gi, ei) {

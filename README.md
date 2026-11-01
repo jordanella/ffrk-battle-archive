@@ -26,7 +26,7 @@ Each level of the browser narrows down: **event type → category → location �
   - **Write-up:** a summary in the notation players used for boss write-ups.
   - **Animation:** the animation files it uses, the animations each contains, and the sound effects each one plays.
 - **Motion library** (`#/motion`). Every animation file the battles use, rewritten as a **motion score**: a documented, picture-free format. The site plays each score as moving boxes, with a timeline, event markers and a dope sheet.
-- **Capture wish-list** (`#/wishlist`). Game files the archive's battles name that are missing from this collection.
+- **Capture wish-list** (`#/wishlist`). What a capture would add: story battles whose rounds haven't been captured, AI scripts no archive holds, and any game files the battles name that are missing from this collection.
 
 Every record carries a **provenance badge**:
 
@@ -61,7 +61,7 @@ All of it is plain JSON under `data/`:
 | `enemies.json` | enemy name → the battles it appears in |
 | `motion/index.json` | every motion score: source path, kind, counts |
 | `motion/<game path>.json` | one motion score |
-| `wishlist.json` | game files named but not yet preserved |
+| `wishlist.json` | what is still to be captured: uncaptured battles by dungeon, missing AI scripts, missing game files |
 
 ## Run it locally
 
