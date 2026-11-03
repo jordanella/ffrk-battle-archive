@@ -23,9 +23,8 @@
   function bezier(p0, p1, p2, p3, t) { var u = 1 - t; return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3; }
   function segValue(s, f) {
     var p = s.p;
-    if (s.k === "curve" && p.length >= 8) {
-      var lo = 0, hi = 1, t = 0.5;
-      for (var i = 0; i < 24; i++) { t = (lo + hi) / 2; if (bezier(p[0], p[2], p[4], p[6], t) < f) lo = t; else hi = t; }
+    if (s.k === "curve" && p.length >= 8) {   // the value eases; time runs evenly from f0 to f1
+      var span = p[6] - p[0], t = span > 0 ? Math.min(1, Math.max(0, (f - p[0]) / span)) : 1;
       return bezier(p[1], p[3], p[5], p[7], t);
     }
     var f0 = p[0], v0 = p[1], f1 = p[p.length - 2], v1 = p[p.length - 1];
@@ -687,7 +686,7 @@
       "rest values <code>at</code> [x, y] from the parent’s origin (y down), <code>size</code> [w, h], <code>pivot</code> [0–1, 0–1], <code>scale</code>, <code>turn</code> [x, y, z] degrees, <code>opacity</code>, <code>tint</code> [r, g, b] 0–1, <code>shown</code>, <code>blend</code>; " +
       "<code>texture</code> {picture, sheet, piece, uvs} (which piece of which sheet it shows); <code>settings</code> (everything else a part has: particle emitter physics, linked files, draw order); " +
       "and <code>tracks</code>: per property (posX, posY, sizeX, sizeY, scaleX, scaleY, rotZ, alpha, red, green, blue, image_uvs_0–3) a list of segments " +
-      "<code>[\"linear\", f0, v0, f1, v1]</code>, <code>[\"hold\", f0, v0, f1, v1]</code> or <code>[\"curve\", f0, v0, c1f, c1v, c2f, c2v, f1, v1]</code> (a cubic Bézier in frame and value). " +
+      "<code>[\"linear\", f0, v0, f1, v1]</code>, <code>[\"hold\", f0, v0, f1, v1]</code> or <code>[\"curve\", f0, v0, c1f, c1v, c2f, c2v, f1, v1]</code> (the value eases along a cubic Bézier through v0, c1v, c2v, v1 while time runs evenly from f0 to f1). " +
       "A property follows the last segment that has started: before the first, its rest value; past a segment’s end, that segment’s end value. " +
       "A part’s frame is its nearest playing ancestor’s: a tag played on a part runs its own clock for its subtree.</p>" +
       "<p><b>flipbook</b>: <code>moves</code> [{name, loop, frames [{hold (ticks), pieces [{picture, piece, offset}]}]}].</p>" +

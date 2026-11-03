@@ -42,6 +42,7 @@
     });
   }
   function typeLink(t) { return "#/type/" + encodeURIComponent(t); }
+  function typeLabel(t) { return t === "Realms" ? "Realm Dungeons" : t; }
 
   // the index, with lookups: battle id -> where it sits
   var where = null;
@@ -51,7 +52,7 @@
         where = {};
         index.events.forEach(function (e) {
           e.dungeons.forEach(function (d) { d.battles.forEach(function (b, i) {
-            where[b.id] = { type: e.category === "Realm events" ? "Realms" : e.category, cat: ["#/event/" + e.id, e.name], loc: d.name, locHref: "#/event/" + e.id, name: b.enemies.join(", ") || ("Battle " + (i + 1)) };
+            where[b.id] = { type: e.category, cat: ["#/event/" + e.id, e.name], loc: d.name, locHref: "#/event/" + e.id, name: b.enemies.join(", ") || ("Battle " + (i + 1)) };
           }); });
         });
         (index.realms || []).forEach(function (r) { r.dungeons.forEach(function (d) { d.battles.forEach(function (b) {
@@ -68,7 +69,7 @@
     var types = (index.types || []).map(function (t) {
       var n = t === "Realms" ? (index.realms || []).length + " realms" :
         index.events.filter(function (e) { return e.category === t; }).length + " events";
-      return '<a class="card typecard" href="' + typeLink(t) + '"><b>' + esc(t) + '</b><span class="muted">' + n + "</span></a>";
+      return '<a class="card typecard" href="' + typeLink(t) + '"><b>' + esc(typeLabel(t)) + '</b><span class="muted">' + n + "</span></a>";
     }).join("");
     app.innerHTML = "<h1>FFRK Battle Archive</h1>" +
       '<p class="muted">Final Fantasy Record Keeper\'s battles: where they happen, who is in them, what each enemy does and how its AI decides, ' +
@@ -81,23 +82,90 @@
   }
 
   // ----- CATEGORIES of a type
-  function typePage(index, type) {
-    var cards;
+  function realmName(index, id) {
+    return id === "other" ? "Other realms" : ((index.realms || []).filter(function (r) { return r.id === id; })[0] || { name: id }).name;
+  }
+  function eventCard(e) {
+    var files = 0, held = 0, battles = 0;
+    e.dungeons.forEach(function (d) { d.battles.forEach(function (b) { battles++; files += b.animation.files; held += b.animation.held; }); });
+    return '<a class="card typecard" href="#/event/' + e.id + '"><b>' + esc(e.name) + "</b> " + badge(e.kind) +
+      '<span class="muted">' + e.dungeons.length + " locations · " + battles + " encounters</span>" + bar(held, files) + "</a>";
+  }
+  function typePage(index, type, focus) {
+    var body;
     if (type === "Realms") {
-      cards = (index.realms || []).map(function (r) {
-        return '<a class="card typecard" href="#/realm/' + r.id + '"><b>' + esc(r.name) + '</b><span class="muted">' + r.locations.length + " locations" +
-          (r.events.length ? " · " + r.events.length + " event" + (r.events.length > 1 ? "s" : "") : "") + "</span></a>";
-      }).join("") + (index.events.some(function (e) { return e.realm_id === "other"; }) ?
-        '<a class="card typecard" href="#/realm/other"><b>Other realms</b><span class="muted">Kingdom Hearts, World of the Gods, Dissidia, Tactics Advance</span></a>' : "");
-    } else {
-      cards = index.events.filter(function (e) { return e.category === type; }).map(function (e) {
-        var files = 0, held = 0, battles = 0;
-        e.dungeons.forEach(function (d) { d.battles.forEach(function (b) { battles++; files += b.animation.files; held += b.animation.held; }); });
-        return '<a class="card typecard" href="#/event/' + e.id + '"><b>' + esc(e.name) + "</b> " + badge(e.kind) +
-          '<span class="muted">' + e.dungeons.length + " locations · " + battles + " encounters</span>" + bar(held, files) + "</a>";
-      }).join("");
+      var view = pref("realmView") || "list";
+      body = '<div class="toggle"><button data-v="list"' + (view === "list" ? ' class="on"' : "") + '>List</button><button data-v="tree"' +
+        (view === "tree" ? ' class="on"' : "") + ">Tree</button></div>" +
+        (view === "tree" ? '<div id="realmtree"><p class="muted">Loading the realm map…</p></div>' :
+          '<div class="grid">' + (index.realms || []).filter(function (r) { return r.locations.length; }).map(function (r) {
+            return '<a class="card typecard" href="#/realm/' + r.id + '"><b>' + esc(r.name) + '</b><span class="muted">' + r.locations.length + " locations</span></a>";
+          }).join("") + "</div>");
+      app.innerHTML = crumbs([[null, typeLabel(type)]]) + "<h1>" + esc(typeLabel(type)) + "</h1>" +
+        '<p class="muted">The story dungeons of each game, as the realm map lists them. Events tied to a game are under <a href="' + typeLink("Realm events") + '">Realm events</a>.</p>' + body;
+      app.querySelectorAll(".toggle [data-v]").forEach(function (b) { b.onclick = function () { pref("realmView", b.dataset.v); typePage(index, type); }; });
+      if (view === "tree") load("realm_map.json").then(function (m) { realmTree(document.getElementById("realmtree"), m, index); });
+      return;
     }
-    app.innerHTML = crumbs([[null, type]]) + "<h1>" + esc(type) + '</h1><div class="grid">' + cards + "</div>";
+    if (type === "Realm events") {
+      var groups = {}, order = [];
+      index.events.filter(function (e) { return e.category === type; }).forEach(function (e) {
+        var g = e.realm_id || "other";
+        if (!groups[g]) { groups[g] = []; order.push(g); }
+        groups[g].push(e);
+      });
+      var rank = (index.realms || []).map(function (r) { return r.id; });
+      order.sort(function (x, y) { return (rank.indexOf(x) < 0 ? 999 : rank.indexOf(x)) - (rank.indexOf(y) < 0 ? 999 : rank.indexOf(y)); });
+      app.innerHTML = crumbs([[null, type]]) + "<h1>" + esc(type) + "</h1>" +
+        '<p class="muted">Time-limited events built around one game. Each game\u2019s story dungeons are under <a href="' + typeLink("Realms") + '">Realm Dungeons</a>.</p>' +
+        order.map(function (g) {
+          return '<h2 id="rev-' + esc(g) + '">' + esc(realmName(index, g)) + (g !== "other" ? ' <a class="small" href="#/realm/' + esc(g) + '">story dungeons \u2192</a>' : "") + "</h2>" +
+            '<div class="grid">' + groups[g].map(eventCard).join("") + "</div>";
+        }).join("");
+      if (focus) { var el = document.getElementById("rev-" + focus); if (el) el.scrollIntoView(); }
+      return;
+    }
+    app.innerHTML = crumbs([[null, type]]) + "<h1>" + esc(type) + '</h1><div class="grid">' +
+      index.events.filter(function (e) { return e.category === type; }).map(eventCard).join("") + "</div>";
+  }
+  // The realm map as the game draws it: each Classic dungeon at its level (row) and line (column), linked to the
+  // dungeons it unlocks; empty levels are left out. Colour = realm.
+  function realmTree(holder, m, index) {
+    var nodes = m.nodes.filter(function (n) { return n.level !== null && n.line !== null; });
+    var levels = Array.from(new Set(nodes.map(function (n) { return n.level; }))).sort(function (a, b) { return a - b; });
+    var row = {}; levels.forEach(function (l, i) { row[l] = i; });
+    var realms = Array.from(new Set(nodes.map(function (n) { return n.realm; }))).filter(Boolean);
+    var hueOf = {}; realms.forEach(function (r, i) { hueOf[r] = Math.round(i * 360 / realms.length); });
+    var lanes = Math.max.apply(null, nodes.map(function (n) { return n.line; })) + 1;
+    var LANE = 150, ROW = 30, PAD = 24, W = PAD * 2 + lanes * LANE + 40, H = PAD * 2 + levels.length * ROW;
+    var pos = {}; nodes.forEach(function (n) { pos[n.id] = [PAD + 20 + n.line * LANE, PAD + 10 + row[n.level] * ROW]; });
+    var focusRealm = pref("treeRealm") || "", focusTag = pref("treeTag") || "";
+    function on(n) { return (!focusRealm || n.realm === focusRealm) && (!focusTag || n.tags.indexOf(focusTag) >= 0); }
+    var edges = [];
+    nodes.forEach(function (n) { n.children.forEach(function (c) { if (pos[c]) edges.push([n, c]); }); });
+    var svg = '<svg class="rtree" viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '">' +
+      edges.map(function (e) {
+        var a = pos[e[0].id], b = pos[e[1]], dim = !on(e[0]);
+        return '<path d="M' + a[0] + "," + a[1] + " C" + a[0] + "," + (a[1] + ROW * 0.6) + " " + b[0] + "," + (b[1] - ROW * 0.6) + " " + b[0] + "," + b[1] +
+          '" class="redge' + (dim ? " dim" : "") + '"/>';
+      }).join("") +
+      nodes.map(function (n) {
+        var p = pos[n.id], hue = hueOf[n.realm] || 0, dim = !on(n);
+        var href = n.listed ? "#/realm/" + n.world + "/" + n.id : null;
+        var label = n.name.length > 22 ? n.name.slice(0, 21) + "\u2026" : n.name;
+        var g = '<g class="rnode' + (dim ? " dim" : "") + '"><title>' + esc(n.realm + " \u00b7 " + n.name + (n.tags.length ? " \u00b7 " + n.tags.map(function (t) { return TAG[t] || t; }).join(", ") : "")) + "</title>" +
+          '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="7" style="fill:hsl(' + hue + ',60%,55%)"' + (n.tags.indexOf("condensed") >= 0 ? ' class="cond"' : "") + "/>" +
+          '<text x="' + (p[0] + 12) + '" y="' + (p[1] + 4) + '">' + esc(label) + "</text></g>";
+        return href ? '<a href="' + href + '">' + g + "</a>" : g;
+      }).join("") + "</svg>";
+    holder.innerHTML = '<div class="treebar"><select id="tree-realm"><option value="">All realms</option>' +
+      realms.map(function (r) { return '<option value="' + esc(r) + '"' + (r === focusRealm ? " selected" : "") + ">" + esc(r) + "</option>"; }).join("") +
+      '</select> <select id="tree-tag"><option value="">Any history</option>' + Object.keys(TAG).map(function (t) {
+        return '<option value="' + t + '"' + (t === focusTag ? " selected" : "") + ">" + esc(TAG[t]) + "</option>"; }).join("") +
+      '</select> <span class="muted small">' + nodes.length + " dungeons on " + levels.length + ' levels of the game\u2019s realm map. Ringed: condensed on Global.</span></div>' +
+      '<div class="treescroll">' + svg + "</div>";
+    document.getElementById("tree-realm").onchange = function (ev) { pref("treeRealm", ev.target.value); realmTree(holder, m, index); };
+    document.getElementById("tree-tag").onchange = function (ev) { pref("treeTag", ev.target.value); realmTree(holder, m, index); };
   }
 
   // ----- LOCATIONS of a category
@@ -107,6 +175,36 @@
         (b.boss ? " " + badge("boss") : "") + (b.uncaptured ? " " + badge("capture", "needs capture") : "") +
         "<small>" + esc(b.enemies.join(", ")) + "</small></a>";
     }).join("") + "</div>";
+  }
+  // a dungeon's history: its versions across the sources (tools/catalog/dungeon_history.py) and tags
+  var TAG = { condensed: "Condensed on Global", unchanged: "Unchanged since 2015", lengthened: "Longer by 2022",
+    jp_differs: "JP differs", jp_only: "No Global record matched", global_2015_only: "2015 record only",
+    global_2022_only: "2022 record only" };
+  function historyTags(d) {
+    return ((d && d.history && d.history.tags) || []).map(function (t) { return " " + badge("hist " + t, TAG[t] || t); }).join("");
+  }
+  function wayback(ts) { return ts ? ts.slice(0, 4) + "-" + ts.slice(4, 6) : ""; }
+  function historyHtml(h) {
+    if (!h) return '<p class="muted small">No history recorded for this dungeon.</p>';
+    var cols = [];
+    if (h.global_2015) cols.push("<div><b>Global, 2015</b> <span class=\"muted small\">" + esc(h.global_2015.source) + "</span><ol>" +
+      h.global_2015.battles.map(function (b) {
+        return "<li>" + esc(b.name) + ' <span class="muted small">' + (b.rounds ? b.rounds + " round" + (b.rounds == 1 ? "" : "s") : "") +
+          (b.bosses && b.bosses.length ? " \u00b7 boss " + esc(b.bosses.join(", ")) : "") + "</span></li>";
+      }).join("") + "</ol></div>");
+    if (h.global_2022) {
+      var g = h.global_2022;
+      cols.push("<div><b>Global, " + esc(wayback(g.captured) || "2022") + '</b> <span class="muted small">Global strategy wiki via the Wayback Machine</span><ol>' +
+        g.battles.map(function (b) {
+          return "<li>" + esc(b.name || "") + ' <span class="muted small">stamina ' + esc(b.stamina) +
+            (b.bosses && b.bosses.length ? " \u00b7 boss " + esc(b.bosses.join(", ")) : "") + "</span></li>";
+        }).join("") + "</ol>" +
+        (g.changed_between ? '<p class="small">Battle count changed between the captures of ' + esc(wayback(g.changed_between[0])) + " and " + esc(wayback(g.changed_between[1])) + ".</p>" :
+          g.first_capture ? '<p class="muted small">Earliest capture ' + esc(wayback(g.first_capture)) + (g.first_capture_battles ? ": " + g.first_capture_battles + (g.first_capture_battles === 1 ? " battle" : " battles") : "") + ".</p>" : "") +
+        "</div>");
+    }
+    cols.push("<div><b>JP, today</b> <span class=\"muted small\">" + esc(h.jp_now.source) + "</span><p>" + h.jp_now.battles + " battle" + (h.jp_now.battles === 1 ? "" : "s") + "</p></div>");
+    return '<div class="history">' + cols.join("") + "</div>";
   }
   function needCount(d) {
     var n = d ? d.battles.filter(function (b) { return b.uncaptured; }).length : 0;
@@ -118,22 +216,34 @@
     var diff = pref("difficulty") || "classic";
     var name = r ? r.name : "Other realms";
     function draw() {
-      var locs = (r ? r.locations : []).map(function (l) {
+      var tagFilter = pref("histTag") || "";
+      var locs = (r ? r.locations : []).filter(function (l) {
+        var d = l[diff] || l.classic || l.elite;
+        return !tagFilter || (d && d.history && d.history.tags.indexOf(tagFilter) >= 0);
+      }).map(function (l) {
         var d = l[diff] || l.classic || l.elite;
         return '<div class="card loc' + (focus === l.id ? " focus" : "") + '" id="loc-' + l.id + '"><div class="loc-head"><b>' + esc(l.name) + "</b>" +
           (d ? ' <span class="muted">Lv ' + esc(d.level) + " · stamina " + esc(d.stamina) + "</span>" : "") +
-          (l[diff] ? "" : ' <span class="muted">(no ' + diff + " version)</span>") + needCount(d) + "</div>" +
-          (d ? '<div class="prov">' + esc(d.layout) + ' <button class="stagebtn mapbtn" data-d="' + esc(d.id) + '">Map</button></div><div class="maphold"></div>' +
+          (l[diff] ? "" : ' <span class="muted">(no ' + diff + " version)</span>") + needCount(d) + historyTags(d) + "</div>" +
+          (d ? '<div class="prov">' + esc(d.layout) + ' <button class="stagebtn mapbtn" data-d="' + esc(d.id) + '">Map</button>' +
+            ' <button class="stagebtn histbtn">History</button></div><div class="maphold"></div><div class="histhold" hidden>' + historyHtml(d.history) + "</div>" +
             encounterList(d.battles) : "") + "</div>";
       }).join("");
-      var events = evs.map(function (e) { return '<a class="card typecard" href="#/event/' + e.id + '"><b>' + esc(e.name) + "</b> " + badge(e.kind) +
-        '<span class="muted">' + e.dungeons.length + " locations</span></a>"; }).join("");
-      app.innerHTML = crumbs([[typeLink("Realms"), "Realms"], [null, name]]) + "<h1>" + esc(name) + "</h1>" +
+      var events = evs.length ? '<p class="related">' + esc(name) + ' events: <a href="#/type/' + encodeURIComponent("Realm events") + "/" + esc(id) + '">' +
+        evs.length + " event" + (evs.length > 1 ? "s" : "") + " \u2192</a></p>" : "";
+      app.innerHTML = crumbs([[typeLink("Realms"), typeLabel("Realms")], [null, name]]) + "<h1>" + esc(name) + "</h1>" + events +
         (r ? '<div class="toggle"><button data-d="classic"' + (diff === "classic" ? ' class="on"' : "") + '>Classic</button><button data-d="elite"' +
           (diff === "elite" ? ' class="on"' : "") + ">Elite</button></div>" : "") +
-        (locs ? "<h2>Story</h2>" + locs : "") + (events ? '<h2>Events</h2><div class="grid">' + events + "</div>" : "");
+        (r ? '<div class="histfilter"><span class="muted small">History:</span> ' + [""].concat(Object.keys(TAG)).filter(function (t) {
+          return !t || (r.locations || []).some(function (l) { var d = l[diff] || l.classic || l.elite; return d && d.history && d.history.tags.indexOf(t) >= 0; });
+        }).map(function (t) { return '<button class="chip' + (t === tagFilter ? " on" : "") + '" data-tag="' + t + '">' + esc(t ? TAG[t] : "All") + "</button>"; }).join("") + "</div>" : "") +
+        (locs ? "<h2>Story</h2>" + locs : "<p class=\"muted\">No dungeon here has that history tag.</p>");
       app.querySelectorAll(".toggle button").forEach(function (b) { b.onclick = function () { diff = b.dataset.d; pref("difficulty", diff); draw(); }; });
       mapButtons((r ? r.locations : []).map(function (l) { return l[diff] || l.classic || l.elite; }));
+      app.querySelectorAll(".histfilter [data-tag]").forEach(function (b) { b.onclick = function () { pref("histTag", b.dataset.tag); draw(); }; });
+      app.querySelectorAll(".histbtn").forEach(function (b) {
+        b.onclick = function () { var h = b.closest(".loc").querySelector(".histhold"); h.hidden = !h.hidden; b.textContent = h.hidden ? "History" : "Hide history"; };
+      });
       if (focus) { var el = document.getElementById("loc-" + focus); if (el) el.scrollIntoView({ block: "center" }); }
     }
     draw();
@@ -141,9 +251,9 @@
   function eventPage(index, id) {
     var e = index.events.filter(function (x) { return x.id === id; })[0];
     if (!e) return notFound();
-    var type = e.category === "Realm events" ? "Realms" : e.category;
+    var type = e.category;
     var trail = [[typeLink(type), type]];
-    if (e.realm_id && e.realm_id !== "null") trail.push(["#/realm/" + e.realm_id, ((index.realms || []).filter(function (r) { return r.id === e.realm_id; })[0] || { name: "Other realms" }).name]);
+    if (type === "Realm events") trail.push(["#/type/" + encodeURIComponent(type) + "/" + (e.realm_id || "other"), realmName(index, e.realm_id || "other")]);
     app.innerHTML = crumbs(trail.concat([[null, e.name]])) + "<h1>" + esc(e.name) + " " + badge(e.kind) + "</h1>" +
       e.dungeons.map(function (d) {
         return '<div class="card loc"><div class="loc-head"><b>' + esc(d.name) + '</b> <span class="muted">Lv ' + esc(d.level) + " · stamina " + esc(d.stamina) + "</span>" +
@@ -169,7 +279,7 @@
   // ----- ENCOUNTER: its rounds and their monsters
   function encounterTrail(b) {
     var w = where[b.id] || {};
-    var trail = [[typeLink(w.type || "Realms"), w.type || ""], w.cat || [null, ""], [w.locHref || null, w.loc || b.dungeon]];
+    var trail = [[typeLink(w.type || "Realms"), typeLabel(w.type || "")], w.cat || [null, ""], [w.locHref || null, w.loc || b.dungeon]];
     return trail;
   }
   function battlePage(id) {
@@ -510,7 +620,7 @@
     if (parts[0] === "battle" && parts.length >= 5) return enemyPage(parts[1], +parts[2], +parts[3], +parts[4]);
     if (parts[0] === "battle") return battlePage(parts[1]);
     indexed().then(function (index) {
-      if (parts[0] === "type") typePage(index, parts[1]);
+      if (parts[0] === "type") typePage(index, parts[1], parts[2]);
       else if (parts[0] === "realm") realmPage(index, parts[1], parts[2]);
       else if (parts[0] === "event") eventPage(index, parts[1]);
       else home(index);
