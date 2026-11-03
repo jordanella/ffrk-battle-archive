@@ -5,8 +5,19 @@
   var app = document.getElementById("app");
   var cache = {};
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]; }); };
+  // motion scores are stored gzipped (<score>.json.gz) and inflated here; everything else is plain JSON
   function load(path) {
-    if (!cache[path]) cache[path] = fetch("data/" + path).then(function (r) { if (!r.ok) throw new Error(path); return r.json(); });
+    if (cache[path]) return cache[path];
+    var gz = /^motion\/.+\.(json|sajson)$/.test(path) && path !== "motion/index.json";
+    cache[path] = fetch("data/" + path + (gz ? ".gz" : "")).then(function (r) {
+      if (!r.ok) throw new Error(path);
+      if (!gz) return r.json();
+      return r.arrayBuffer().then(function (buf) {
+        var b = new Uint8Array(buf);
+        if (b[0] !== 0x1f || b[1] !== 0x8b) return JSON.parse(new TextDecoder().decode(b));   // already inflated in transit
+        return new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream("gzip"))).json();
+      });
+    });
     return cache[path];
   }
   function pref(k, v) {   // per-viewer conveniences (theme, Classic / Elite)
@@ -76,7 +87,7 @@
       "from battles players captured and battles rebuilt from their detailed write-ups.</p>" +
       '<div class="stats">' + [["dungeons", c.dungeons], ["battles", c.battles], ["enemies", c.enemies], ["events", c.events]]
         .map(function (s) { return '<div class="stat"><b>' + s[1] + "</b><span>" + s[0] + "</span></div>"; }).join("") + "</div>" +
-      '<div class="grid">' + types + "</div>" +
+      '<div class="grid">' + types + '<a class="card typecard" href="#/skills"><b>Player skills</b><span class="muted">soul breaks, bursts, braves, abilities, magicite</span></a></div>' +
       '<p class="prov" style="margin-top:22px"><a href="#/motion">Motion library</a>: every animation the battles use, played as boxes from our picture-free motion scores. ' +
       '<a href="#/wishlist">Capture wish-list</a>: the battles, AI scripts and files still to be captured.</p>';
   }
@@ -611,11 +622,69 @@
     });
   }
 
+  // ----- PLAYER SKILLS (data/skills/, tools/browser/skills.py): each skill's animation as motion scores
+  function skillRow(sk) {
+    var files = sk.held ? sk.phases.map(function (f) {
+      return '<a class="mono" href="' + window.Motion.link("/Content/lang/ab/ability/" + sk.animation + "/" + f) + '">' + esc(f.replace(/\.json$/, "")) + "</a>";
+    }).join(" ") + (sk.particles ? ' <span class="muted small">+ ' + sk.particles + " particle file" + (sk.particles === 1 ? "" : "s") + "</span>" : "")
+      : '<span class="missing small">animation not held</span>';
+    return '<div class="skill"><div><b>' + esc(sk.name) + "</b>" + (sk.tier ? " " + badge("tier", sk.tier) : "") +
+      (sk.from ? ' <span class="muted small">from ' + esc(sk.from) + "</span>" : "") +
+      '</div><div class="small">' + files + ' <span class="muted mono">· animation ' + esc(sk.animation) + "</span></div></div>";
+  }
+  function skillsPage(kind, owner) {
+    load("skills/index.json").then(function (ix) {
+      var k = ix.kinds.filter(function (x) { return x.kind === (kind || pref("skillKind")); })[0] || ix.kinds[0];
+      pref("skillKind", k.kind);
+      if (owner !== undefined) pref("skillQ", owner);          // #/skills/<kind>/<owner>: that owner's skills
+      return load("skills/" + k.kind + ".json").then(function (d) {
+        app.innerHTML = crumbs([[null, "Player skills"]]) + "<h1>Player skills</h1>" +
+          '<p class="muted">Each skill\u2019s animation as motion scores: its phases (launch, shot, hit \u2026) and the particle effects they play, ' +
+          "drawn as boxes. The character\u2019s own sprite and the cut-in pictures are images, so they are not here.</p>" +
+          '<div class="histfilter">' + ix.kinds.map(function (x) {
+            return '<a class="chip' + (x.kind === k.kind ? " on" : "") + '" href="#/skills/' + x.kind + '">' + esc(x.label) +
+              ' <span class="muted">' + x.count + "</span></a>";
+          }).join("") + "</div>" +
+          '<p class="muted small">' + d.skills.filter(function (x) { return x.held; }).length + " of " + d.skills.length + " animations held.</p>" +
+          '<input id="skillq" class="skillq" type="search" placeholder="Filter by name or owner\u2026" value="' + esc(pref("skillQ") || "") + '">' +
+          '<div id="skilllist"></div>';
+        var list = document.getElementById("skilllist"), input = document.getElementById("skillq");
+        function draw() {
+          var q = input.value.trim().toLowerCase();
+          pref("skillQ", input.value);
+          var shown = d.skills.filter(function (x) {
+            return !q || (x.name + " " + x.owner + " " + (x.from || "") + " " + (x.tier || "")).toLowerCase().indexOf(q) >= 0;
+          });
+          var realms = [], byRealm = {};
+          shown.forEach(function (x) {
+            var r = x.realm === undefined ? "" : (x.realm || "Other");
+            if (!byRealm[r]) { byRealm[r] = { owners: [], by: {} }; realms.push(r); }
+            var g = byRealm[r];
+            if (!g.by[x.owner]) { g.by[x.owner] = []; g.owners.push(x.owner); }
+            g.by[x.owner].push(x);
+          });
+          list.innerHTML = shown.length ? realms.map(function (r) {
+            var g = byRealm[r];
+            return (r ? "<h2>" + esc(r) + "</h2>" : "") + g.owners.map(function (o) {
+              var items = g.by[o];
+              return "<details" + (q ? " open" : "") + '><summary><b>' + esc(o || "\u2014") + '</b> <span class="muted small">' + items.length + "</span></summary>" +
+                items.map(skillRow).join("") + "</details>";
+            }).join("");
+          }).join("") : '<p class="muted">Nothing matches.</p>';
+        }
+        var t;
+        input.oninput = function () { clearTimeout(t); t = setTimeout(draw, 150); };
+        draw();
+      });
+    });
+  }
+
   function notFound() { app.innerHTML = '<h1>Not found</h1><p><a href="#/">Back to the archive</a></p>'; }
   function route() {
     var parts = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
     window.scrollTo(0, 0);
     if (parts[0] === "wishlist") return wishlist();
+    if (parts[0] === "skills") return skillsPage(parts[1], parts[2]);
     if (parts[0] === "motion") return window.Motion.page(app, { esc: esc, crumbs: crumbs, load: load }, parts.slice(1).join("/"));
     if (parts[0] === "battle" && parts.length >= 5) return enemyPage(parts[1], +parts[2], +parts[3], +parts[4]);
     if (parts[0] === "battle") return battlePage(parts[1]);

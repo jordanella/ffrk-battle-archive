@@ -62,6 +62,139 @@
   function ink() { return getComputedStyle(document.documentElement).getPropertyValue("--ink").trim() || "#222"; }
   function baseName(p) { return String(p || "").replace(/^.*\//, ""); }
 
+  // ------------------------------------------------------------ particles
+  // A particle part (settings.particle {file, frame}) runs the emitters of its effect file (a pb_*.json score: parts of
+  // type "emitter" whose settings are the game's emitter settings) the way the game's engine does: the effect starts
+  // when its host's timeline reaches the trigger frame and emits while that animation plays (an emitter with no
+  // duration: for as long as the effect is on). An emitter opened on its own (a particle file's page) runs itself.
+  // Each particle is drawn as a soft dot: sized from its texture's size (a sheet piece, or the picture's pixel size kept
+  // in the score) and its size curve, coloured and faded by its settings, glowing where the effect adds light. A
+  // seeded random source per effect, restarted with each run, so seeking replays the very same particles.
+  // Ported from our renderer for the game client (client/renderer/kmr.js), where it was checked against the live game.
+  var MAX_LIVE = 2500;
+  function seeded(seed) {        // mulberry32
+    var t = seed >>> 0;
+    return function () {
+      t = (t + 0x6D2B79F5) >>> 0;
+      var r = Math.imul(t ^ (t >>> 15), t | 1);
+      r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function keyed(list, t) {      // value of [{key, value}] keyframes (number or array) at t (0..1)
+    if (!list || !list.length) return undefined;
+    var i = 0;
+    while (i < list.length - 1 && list[i + 1].key <= t) i++;
+    var a = list[i], b = list[i + 1];
+    if (!b || t <= a.key) return a.value;
+    var u = (t - a.key) / Math.max(1e-6, b.key - a.key);
+    if (typeof a.value === "number") return a.value + (b.value - a.value) * u;
+    if (Array.isArray(a.value)) return a.value.map(function (v, k) { return v + (b.value[k] - v) * u; });
+    return u < 0.5 ? a.value : b.value;
+  }
+  function FX(seed) { this.seed = seed; this.runs = 0; this.emitters = null; this.sizes = {}; this.active = false; this.live = 0; }
+  FX.prototype.load = function (settings, sizes) {
+    this.emitters = settings.map(function (a) { return { a: a || {}, parts: [], acc: 0, t: 0, spawned: 0 }; });
+    this.sizes = sizes || {};
+  };
+  FX.prototype.reset = function () { this.clear(); this.active = false; this.runs = 0; this.lastClock = undefined; this.lastFrame = undefined; };
+  FX.prototype.restart = function () {
+    this.runs++;
+    this.rand = seeded(this.seed * 7919 + this.runs);
+    (this.emitters || []).forEach(function (e) { e.t = 0; e.acc = 0; e.spawned = 0; });
+  };
+  function emitTimes(a) {        // [start, duration] in seconds; startframe and time are frames (1/60 s)
+    return [(a.startframe || 0) / 60, a.emitter_duration > 0 ? a.emitter_duration : (a.time || 0) / 60];
+  }
+  FX.prototype.finished = function () {   // every emitter past its emission time
+    return !this.emitters || this.emitters.every(function (e) { var st = emitTimes(e.a); return st[1] > 0 && e.t > st[0] + st[1]; });
+  };
+  FX.prototype.clear = function () { (this.emitters || []).forEach(function (e) { e.parts = []; }); this.live = 0; };
+  FX.prototype.count = function () { return this.live; };
+  FX.prototype.spawn = function (e) {
+    var a = e.a, R = this.rand, rnd = function (x, y) { return x + R() * (y - x); };
+    var q = { age: 0, life: rnd(a.emitter_lifetimeMin || 0.5, a.emitter_lifetimeMax || a.emitter_lifetimeMin || 0.5) };
+    var x = (a.emitter_position || [0, 0])[0], y = (a.emitter_position || [0, 0])[1];
+    if (a.emitShape_type === "circle") {
+      var ang = R() * Math.PI * 2, r = rnd(a.emitShape_circle_innerRadius || 0, a.emitShape_circle_outerRadius || 0);
+      x += Math.cos(ang) * r; y += Math.sin(ang) * r;
+    } else if (a.emitShape_type === "line") {
+      var la = (a.emitShape_line_angle || 0) * Math.PI / 180, d = rnd(-0.5, 0.5) * (a.emitShape_line_length || 0),
+          th = rnd(-0.5, 0.5) * (a.emitShape_line_thickness || 0);
+      x += Math.cos(la) * d - Math.sin(la) * th; y += Math.sin(la) * d + Math.cos(la) * th;
+    } else {
+      var mx = a.emitShape_box_max || [0, 0], mn = a.emitShape_box_min || [-mx[0], -mx[1]];
+      x += rnd(mn[0], mx[0]); y += rnd(mn[1], mx[1]);
+    }
+    q.x = x; q.y = y;
+    var va = ((a.initVel_angle || 0) + rnd(-0.5, 0.5) * (a.initVel_angleDelta || 0)) * Math.PI / 180,
+        sp = rnd(a.initVel_speedMin || 0, a.initVel_speedMax || a.initVel_speedMin || 0);
+    q.vx = Math.cos(va) * sp; q.vy = Math.sin(va) * sp;
+    q.rot = (a.rotation_angle || 0) + rnd(-0.5, 0.5) * (a.rotation_angleDelta || 0);
+    q.spin = rnd(a.rotation_spinRateMin || 0, a.rotation_spinRateMax || a.rotation_spinRateMin || 0);
+    var smin = a.size_rand_scale_min || [1, 1], smax = a.size_rand_scale_max || smin;
+    q.sx = rnd(smin[0], smax[0]);
+    q.sy = a.size_preserveAspectRatio !== false ? q.sx : rnd(smin[1], smax[1]);
+    var cmin = a.color_rand_min || [1, 1, 1], cmax = a.color_rand_max || cmin, u = R();
+    q.c = [0, 1, 2].map(function (k) { return cmin[k] + (cmax[k] - cmin[k]) * u; });
+    q.cu = R();
+    var pick = a.texture_randPick;
+    q.tex = a.texture_type === "randPick" && pick && pick.length ? pick[Math.floor(R() * pick.length)] : a.texture_constant;
+    e.parts.push(q);
+    this.live++;
+  };
+  FX.prototype.step = function (dt, emitting) {
+    if (!this.emitters) return;
+    for (var i = 0; i < this.emitters.length; i++) {
+      var e = this.emitters[i], a = e.a, st = emitTimes(a);
+      e.t += dt;
+      // with no duration an emitter runs while its effect is on; with one, only while its animation plays
+      if ((emitting || st[1] <= 0 && this.active) && e.t >= st[0] && (st[1] <= 0 || e.t <= st[0] + st[1])) {
+        e.acc += (a.emitter_rate || 0) * dt;
+        while (e.acc >= 1) {
+          e.acc -= 1;
+          if (a.emitter_maxParticles === 1 && e.spawned >= 1) continue;      // a one-particle effect: one shot per start
+          if (e.parts.length < (a.emitter_maxParticles || 100) && this.live < MAX_LIVE) { this.spawn(e); e.spawned++; }
+        }
+      }
+      var acc = a.physics_accel || [0, 0], drag = a.physics_dragCoeff || 0, rad = a.physics_radialAccel || 0, tan = a.physics_tangentialAccel || 0;
+      for (var j = e.parts.length - 1; j >= 0; j--) {
+        var q = e.parts[j];
+        q.age += dt;
+        if (q.age >= q.life) { e.parts.splice(j, 1); this.live--; continue; }
+        var dist = Math.sqrt(q.x * q.x + q.y * q.y) || 1, nx = q.x / dist, ny = q.y / dist;
+        q.vx += (acc[0] + nx * rad - ny * tan) * dt;
+        q.vy += (acc[1] + ny * rad + nx * tan) * dt;
+        if (drag) { var kd = Math.max(0, 1 - drag * dt); q.vx *= kd; q.vy *= kd; }
+        q.x += q.vx * dt; q.y += q.vy * dt;
+        q.rot += q.spin * dt;
+      }
+    }
+  };
+  function texSize(tex, sizes, lib) {   // a particle texture's size in pixels
+    if (tex && tex.file && tex.packerid && lib) {
+      var pc = lib.piece(tex.file, tex.packerid);
+      if (pc && pc.size) return pc.size;
+    }
+    var px = tex && sizes[tex.image];
+    if (px) {
+      var u0 = tex.uvMin || [0, 0], u1 = tex.uvMax || [1, 1];
+      return [Math.abs(u1[0] - u0[0]) * px[0] || px[0], Math.abs(u1[1] - u0[1]) * px[1] || px[1]];
+    }
+    return [16, 16];
+  }
+  var dotCache = {};
+  function dot(col) {            // a soft round dot in a colour (quantised), white at the centre fading to clear
+    var c = col.map(function (v) { return Math.round(Math.max(0, Math.min(1, v)) * 15); }), key = c.join(",");
+    if (dotCache[key]) return dotCache[key];
+    var cv = document.createElement("canvas");
+    cv.width = cv.height = 32;
+    var x = cv.getContext("2d"), g = x.createRadialGradient(16, 16, 0, 16, 16, 16), rgb = c.map(function (v) { return Math.round(v * 17); }).join(",");
+    g.addColorStop(0, "rgba(" + rgb + ",1)"); g.addColorStop(0.45, "rgba(" + rgb + ",.75)"); g.addColorStop(1, "rgba(" + rgb + ",0)");
+    x.fillStyle = g; x.fillRect(0, 0, 32, 32);
+    return (dotCache[key] = cv);
+  }
+
   // ------------------------------------------------------------ the scene engine
   function Scene(sc) {
     var self = this;
@@ -94,6 +227,11 @@
       n.depth = par.depth + 1;
     });
     this.nodes.forEach(function (n) {
+      if (n.type !== "particle" && n.type !== "emitter") return;
+      n.fx = new FX(n.i + 1);
+      if (n.type === "emitter") n.fx.load([n.settings], (sc.derived || {}).picture_sizes);
+    });
+    this.nodes.forEach(function (n) {
       if (n.kids.some(function (c) { return c.z; })) n.kids = n.kids.map(function (c, i) { return [c, i]; })
         .sort(function (a, b) { return (a[0].z - b[0].z) || (a[1] - b[1]); }).map(function (x) { return x[0]; });
     });
@@ -101,7 +239,10 @@
   Scene.prototype.reset = function (tagName) {
     var all = this.showHidden;
     // the top parts are switched on by the game's own code when the scene is put on screen
-    this.nodes.forEach(function (n) { n.visible = all || n.shown || n.p.parent < 0; n.clock = null; n.fxOn = true; n.flipMove = (n.settings.sprite || {}).action; n.flipT = 0; });
+    this.nodes.forEach(function (n) {
+      n.visible = all || n.shown || n.p.parent < 0; n.clock = null; n.fxOn = true; n.flipMove = (n.settings.sprite || {}).action; n.flipT = 0;
+      if (n.fx) n.fx.reset();
+    });
     this.root.clock = null;
     this.clocks = [];
     this.tick = 0;
@@ -182,6 +323,39 @@
       this.run(k);
     }
     this.nodes.forEach(function (n) { n.flipT++; });
+    this.stepFx(1 / 60);
+  };
+  function shownNow(n) { for (var q = n; q && !q.isRoot; q = q.parent) if (!q.visible) return false; return true; }
+  Scene.prototype.stepFx = function (dt) {
+    var self = this;
+    this.nodes.forEach(function (n) {
+      var fx = n.fx;
+      if (!fx) return;
+      if (!fx.emitters && n.type === "particle" && self.lib) {
+        var eff = self.lib.effect((n.settings.particle || {}).file);
+        if (eff && eff.kind === "scene") fx.load(eff.parts.filter(function (q) { return q.type === "emitter"; })
+          .map(function (q) { return q.settings; }), (eff.derived || {}).picture_sizes);
+      }
+      if (!fx.emitters) return;
+      if (!shownNow(n)) { if (fx.active || fx.live) { fx.clear(); fx.active = false; } fx.lastFrame = undefined; return; }
+      if (n.type === "emitter" || !self.tag && !self.clocks.length) {
+        // an emitter on its own page, or a scene with no timeline: running from the start, starting over once done
+        if (!fx.active || fx.finished() && !fx.live) { fx.restart(); fx.active = true; }
+        fx.step(dt, n.fxOn);
+        return;
+      }
+      var k = null;
+      for (var h = n; h && !k; h = h.parent) k = h.clock;
+      var f = k ? k.frame : undefined, at = (n.settings.particle || {}).frame || 0;
+      var prev = k !== fx.lastClock ? undefined : fx.lastFrame;
+      var reached = f !== undefined && f >= at && (prev === undefined ? f - at < 2 : prev < at);
+      // a loop came round past the trigger (only a trigger inside the loop's range), and the last run is over
+      var lapped = f !== undefined && prev !== undefined && f < prev && f >= at && k && at >= k.from;
+      if (reached || lapped && fx.finished()) { fx.restart(); fx.active = true; }
+      else if (k && k.loop && !k.done && f !== undefined && at >= k.from && at < k.to && f >= at && !fx.active) { fx.restart(); fx.active = true; }
+      fx.lastClock = k; fx.lastFrame = f;
+      fx.step(dt, fx.active && n.fxOn && (!k || !k.done));
+    });
   };
   Scene.prototype.seek = function (tick) {
     if (tick < this.tick || !this.tag) this.reset(this.tag ? this.tag.name : null);
@@ -232,7 +406,7 @@
   }
 
   // texture-sheet layouts and flipbooks, loaded as parts need them (scores too: no pictures)
-  function Library() { this.sheets = {}; this.books = {}; }
+  function Library() { this.sheets = {}; this.books = {}; this.effects = {}; }
   Library.prototype.get = function (store, path, fn) {
     var self = this;
     if (!path) return null;
@@ -251,6 +425,7 @@
     return sc && sc.byName ? sc.byName[name] : null;
   };
   Library.prototype.book = function (file) { return this.get(this.books, file, this.onload); };
+  Library.prototype.effect = function (file) { return this.get(this.effects, file, this.onload); };
 
   // ------------------------------------------------------------ drawing
   function Stage(canvas) {
@@ -264,12 +439,36 @@
     if (this.c.width !== Math.round(w * dpr)) { this.c.width = Math.round(w * dpr); this.c.height = Math.round(h * dpr); }
     this.dpr = dpr; this.w = w; this.h = h;
   };
+  // the default frame: what is framed, centred, with at least minView scene units each way around it (the
+  // player's 480: an effect seen with its surroundings, about a battle screen and a half across)
   Stage.prototype.fit = function (box) {
     this.size();
-    if (!box) { this.view = { k: 1, x: this.w / 2, y: this.h / 2 }; return; }
-    var bw = Math.max(16, box[2] - box[0]), bh = Math.max(16, box[3] - box[1]);
+    if (!box) { this.view = { k: 1, x: this.w / 2, y: this.h / 2 }; this.home = this.view; return; }
+    var min = this.minView || 16;
+    var bw = Math.max(min, box[2] - box[0]), bh = Math.max(min, box[3] - box[1]);
     var k = Math.min(this.w / bw, this.h / bh) * 0.86;
     this.view = { k: k, x: this.w / 2 - k * (box[0] + box[2]) / 2, y: this.h / 2 - k * (box[1] + box[3]) / 2 };
+    this.home = this.view;
+  };
+  // the viewer's own zoom and pan: the wheel zooms about the pointer, a drag pans, a double-click frames again
+  Stage.prototype.interactive = function (redraw) {
+    var self = this, c = this.c, drag = null;
+    c.style.cursor = "grab";
+    c.addEventListener("wheel", function (ev) {
+      ev.preventDefault();
+      var r = c.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top, v = self.view;
+      var f = Math.exp(-ev.deltaY * 0.0015), k = Math.max(0.02, Math.min(40, v.k * f));
+      self.view = { k: k, x: mx - (mx - v.x) * k / v.k, y: my - (my - v.y) * k / v.k };
+      redraw();
+    }, { passive: false });
+    c.addEventListener("pointerdown", function (ev) { drag = [ev.clientX, ev.clientY, self.view.x, self.view.y]; c.setPointerCapture(ev.pointerId); c.style.cursor = "grabbing"; });
+    c.addEventListener("pointermove", function (ev) {
+      if (!drag) return;
+      self.view = { k: self.view.k, x: drag[2] + ev.clientX - drag[0], y: drag[3] + ev.clientY - drag[1] };
+      redraw();
+    });
+    c.addEventListener("pointerup", function () { drag = null; c.style.cursor = "grab"; });
+    c.addEventListener("dblclick", function () { if (self.home) { self.view = self.home; redraw(); } });
   };
   Stage.prototype.clear = function () {
     var ctx = this.ctx, d = this.dpr;
@@ -324,6 +523,40 @@
       }
     }
   };
+  Stage.prototype.particles = function (fx, w, alpha, tint, lib) {
+    var ctx = this.ctx, v = this.view, d = this.dpr, tn = tint && (tint[0] < 0.99 || tint[1] < 0.99 || tint[2] < 0.99) ? tint : null;
+    fx.emitters.forEach(function (e) {
+      var a = e.a;
+      if (!e.parts.length) return;
+      var additive = a.emitter_blendMode === "add";
+      ctx.globalCompositeOperation = additive ? "lighter" : a.emitter_blendMode === "subtract" ? "difference" : "source-over";
+      e.parts.forEach(function (q) {
+        var t = q.age / q.life;
+        var al = a.alpha_type === "constant" ? (a.alpha_constant === undefined ? 1 : a.alpha_constant) : keyed(a.alpha_keyframes, t);
+        al = (al === undefined ? 1 : al) * alpha;
+        if (additive) al *= al;                       // the engine's additive blend (see kmr.js)
+        if (al <= 0.01) return;
+        var tex = a.texture_type === "keyframes" ? keyed(a.texture_keyframes, t) : q.tex;
+        var size = texSize(tex, fx.sizes, lib);
+        var sc = (a.scale_type === "keyframes" ? keyed(a.scale_keyframes, t) : a.scale_constant) || [1, 1];
+        var col = q.c;
+        if (a.color_type === "keyframes") col = keyed(a.color_keyframes, t) || col;
+        else if (a.color_type === "randKeyframes") {
+          var ck = keyed(a.color_randKeyframes, t);
+          if (ck && ck.min) col = ck.min.map(function (x, k) { return x + (ck.max[k] - x) * q.cu; });
+        }
+        if (tn) col = (col || [1, 1, 1]).map(function (x, k) { return x * tn[k]; });
+        var dw = size[0] * q.sx * sc[0], dh = size[1] * q.sy * sc[1];
+        var rot = (a.rotation_alignToVelocity ? Math.atan2(q.vy, q.vx) * 180 / Math.PI + (a.rotation_alignToVelocityAngle || 0) : q.rot) * Math.PI / 180;
+        var c = Math.cos(rot), s = Math.sin(rot), m = mul(w, [c, s, -s, c, q.x, q.y]);
+        ctx.setTransform(d * v.k * m[0], d * v.k * m[1], d * v.k * m[2], d * v.k * m[3], d * (v.k * m[4] + v.x), d * (v.k * m[5] + v.y));
+        ctx.globalAlpha = Math.min(1, al);
+        ctx.drawImage(dot(col || [1, 1, 1]), -dw / 2, -dh / 2, dw, dh);
+      });
+    });
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+  };
   Stage.prototype.marker = function (w, kind, a, on, label, tick) {
     var ctx = this.ctx, p = this.screen(w, 0, 0);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -331,17 +564,9 @@
     if (kind === "pivot") {
       ctx.strokeStyle = "rgba(128,128,128,.7)";
       ctx.beginPath(); ctx.moveTo(p[0] - 3, p[1]); ctx.lineTo(p[0] + 3, p[1]); ctx.moveTo(p[0], p[1] - 3); ctx.lineTo(p[0], p[1] + 3); ctx.stroke();
-    } else {   // a particle emitter: a ring with sparks drifting out while it runs
-      ctx.strokeStyle = on ? "#d39a2f" : "rgba(160,140,100,.5)";
+    } else {   // a particle emitter: a ring where it sits (its particles are drawn by Stage.particles)
+      ctx.strokeStyle = on ? "rgba(211,154,47,.7)" : "rgba(160,140,100,.4)";
       ctx.beginPath(); ctx.arc(p[0], p[1], 6, 0, Math.PI * 2); ctx.stroke();
-      if (on) {
-        ctx.fillStyle = "#d39a2f";
-        for (var i = 0; i < 6; i++) {
-          var ph = ((tick * 0.02 + i / 6) % 1), ang = i * 1.047 + tick * 0.01;
-          ctx.globalAlpha = 1 - ph;
-          ctx.beginPath(); ctx.arc(p[0] + Math.cos(ang) * (6 + ph * 18), p[1] + Math.sin(ang) * (6 + ph * 18), 1.6, 0, Math.PI * 2); ctx.fill();
-        }
-      }
       if (this.opts.labels && label) {
         ctx.globalAlpha = 0.85; ctx.fillStyle = "#a3742f"; ctx.font = "10px " + getComputedStyle(document.body).fontFamily;
         ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(label, p[0] + 9, p[1]);
@@ -350,6 +575,7 @@
     ctx.globalAlpha = 1;
   };
   function drawScene(stage, scene, lib, opts) {
+    if (lib && !scene.lib) scene.lib = lib;          // particle effects load through it
     if (!opts || !opts.keep) stage.clear();
     scene.walk(function (n, w, a, s) {
       if (n.type === "image" || n.type === "window" || n.type === "mask") {
@@ -379,6 +605,7 @@
         ctx.strokeStyle = "rgba(196,61,47,.75)"; ctx.lineWidth = 1 / (stage.view.k * Math.max(Math.abs(s.sx) || 1, 0.01));
         ctx.strokeRect(r[0], r[1], r[2], r[3]); ctx.setLineDash([]);
       } else if (n.type === "particle" || n.type === "emitter") {
+        if (n.fx && n.fx.emitters) stage.particles(n.fx, w, a, s.tint, lib);
         stage.marker(w, "fx", a, n.fxOn, baseName((n.settings.particle || {}).file) || n.name, scene.tick);
       } else if (stage.opts.pivots) {
         stage.marker(w, "pivot", a);
@@ -394,12 +621,23 @@
   }
   // the region the tag's visible parts cover: a box many times the usual part's size (a full-screen flash) doesn't count
   function extent(scene, lib, ticks) {
-    var boxes = [];
+    var boxes = [], fxBoxes = [];     // parts; emitters with their particles' reach (never judged outsized)
     scene.reset(scene.tag ? scene.tag.name : null);
     var stepEvery = Math.max(1, Math.floor(ticks / 60));
     for (var t = 0; t <= ticks; t += stepEvery) {
       scene.seek(t);
       scene.walk(function (n, w, a, s) {
+        if (n.type === "particle" || n.type === "emitter") {
+          // an emitter and how far its particles reach (fastest launch over the longest life), so a burst fits
+          var em = n.type === "emitter" ? [n.settings] : n.fx && n.fx.emitters ? n.fx.emitters.map(function (e) { return e.a; }) : [];
+          var reach = em.reduce(function (m, st) {
+            return Math.max(m, Math.min(320, (st.initVel_speedMax || st.initVel_speedMin || 0) * (st.emitter_lifetimeMax || st.emitter_lifetimeMin || 0.5) +
+              Math.max(st.emitShape_circle_outerRadius || 0, Math.abs(((st.emitShape_box_max || [0, 0])[0])), Math.abs(((st.emitShape_box_max || [0, 0])[1])))));
+          }, 24);
+          var c = apply(w, 0, 0);
+          fxBoxes.push([c[0] - reach, c[1] - reach, c[0] + reach, c[1] + reach]);
+          return;
+        }
         if (["image", "sprite", "collision", "window"].indexOf(n.type) < 0) return;
         var r = n.type === "sprite" ? [-16, -16, 32, 32] : rectOf(n, s, lib);
         if (!r[2] || !r[3]) return;
@@ -410,11 +648,12 @@
         boxes.push(bx);
       }, {});
     }
-    if (!boxes.length) return null;
+    if (!boxes.length && !fxBoxes.length) return null;
     var areas = boxes.map(function (b) { return b.area; }).sort(function (x, y) { return x - y; });
-    var cap = Math.max(areas[Math.floor(areas.length / 2)] * 12, 64 * 64);
+    var cap = Math.max((areas[Math.floor(areas.length / 2)] || 0) * 12, 64 * 64);
     var kept = boxes.filter(function (b) { return b.area <= cap; });
     if (!kept.length) kept = boxes;
+    kept = kept.concat(fxBoxes);
     return kept.reduce(function (u, b) { return [Math.min(u[0], b[0]), Math.min(u[1], b[1]), Math.max(u[2], b[2]), Math.max(u[3], b[3])]; },
       [Infinity, Infinity, -Infinity, -Infinity]);
   }
@@ -422,6 +661,7 @@
   // ------------------------------------------------------------ the player page for a scene
   function scenePage(app, sc, file) {
     var esc = H.esc, scene = new Scene(sc), lib = new Library();
+    scene.lib = lib;
     var tags = (sc.tags || []).filter(function (t) { return !("raw" in t); });
     var pick = ["idle", "wait", "play", "standby"].filter(function (n) { return scene.tags[n]; })[0] || (tags[0] || {}).name;
     var counts = {};
@@ -430,7 +670,9 @@
       "<h1>" + esc(baseName(sc.source)) + '</h1><p class="muted mono">' + esc(sc.source) + "</p>" +
       '<p class="muted">A scene of ' + sc.derived.parts + " parts (" + sc.derived.animated_parts + " animated, " + sc.derived.keyframes +
       " keyframe segments), " + tags.length + " tags and " + scene.events.length + " timeline events, at " + scene.fps + " frames a second. " +
-      "Each box is one part, drawn where the score puts it; its colour stands for the texture piece it shows. Dashed boxes add their light; red dashes are hit areas; amber rings are particle emitters.</p>" +
+      "Each box is one part, drawn where the score puts it; its colour stands for the texture piece it shows. Dashed boxes add their light; red dashes are hit areas; amber rings are particle emitters, " +
+      "and the soft dots around them their particles, simulated from the emitter settings (each dot stands for one particle’s texture). " +
+      "Scroll on the stage to zoom, drag to pan, double-click to frame it again.</p>" +
       '<div class="player"><div class="stagebox"><canvas id="mstage"></canvas></div>' +
       '<div class="controls"><select id="mtag">' + tags.map(function (t) {
         return '<option value="' + esc(t.name) + '"' + (t.name === pick ? " selected" : "") + ">" + esc(t.name) + " (" + t.from + "–" + t.to + (t.loop ? ", loops" : "") + ")</option>";
@@ -451,7 +693,7 @@
       '<details class="complete"><summary>All ' + sc.parts.length + " parts</summary>" + partsTable(sc) + "</details>" +
       '<details class="complete"><summary>Tags and events (whole file)</summary><p class="small">' +
       Object.keys(counts).map(function (k) { return esc(k) + " ×" + counts[k]; }).join(" · ") + "</p></details>" +
-      '<p class="prov">Score: <a href="data/motion/' + esc(file) + '">' + esc(file) + "</a> (" + esc(sc.score) +
+      '<p class="prov">Score: <a href="data/motion/' + esc(file) + '.gz">' + esc(file) + "</a> (gzipped) (" + esc(sc.score) +
       '). <a href="#/motion">About the format</a>. Linked files: ' + (sc.derived.linked.concat(sc.derived.sheets || []).map(function (p) {
         return '<a class="mono" href="' + link(p) + '">' + esc(baseName(p)) + "</a>";
       }).concat(sc.derived.textures.filter(function (p) { return /\.png$/.test(p); }).map(function (p) {
@@ -459,10 +701,20 @@
       })).join(", ") || "none") + "</p>";
 
     var stage = new Stage(document.getElementById("mstage"));
+    stage.minView = 480;
+    stage.interactive(function () { draw(); });
     var scrub = document.getElementById("mscrub"), frameEl = document.getElementById("mframe");
     var playing = true, speed = 1, acc = 0, ticks = 0, last = 0, alive = true;
     lib.onload = function () { if (!playing) draw(); };
-    function ticksOf(t) { return t ? Math.max(1, Math.round((t.to - t.from) * 60 / scene.fps)) : 60; }
+    function ticksOf(t) {
+      if (t) return Math.max(1, Math.round((t.to - t.from) * 60 / scene.fps));
+      var em = scene.nodes.filter(function (n) { return n.type === "emitter"; });
+      if (!em.length) return 60;
+      return Math.min(600, Math.max(60, Math.max.apply(null, em.map(function (n) {     // emission, plus the last particles' life
+        var a = n.settings, st = emitTimes(a);
+        return Math.round(60 * (st[0] + (st[1] > 0 ? st[1] : 2) + (a.emitter_lifetimeMax || a.emitter_lifetimeMin || 0.5)));
+      }))));
+    }
     function choose(name) {
       scene.reset(name);
       ticks = ticksOf(scene.tag);
@@ -583,7 +835,7 @@
       '<div class="player"><div class="stagebox"><canvas id="mstage"></canvas></div><div class="controls"><select id="mmove">' +
       sc.moves.map(function (m) { return '<option value="' + esc(m.name) + '">' + esc(m.name) + " (" + m.frames.length + " frames, " + m.derived.length + " ticks" + (m.loop ? ", loops" : "") + ")</option>"; }).join("") +
       '</select> <span id="mframe" class="mono muted"></span></div></div><div id="mframes"></div>' +
-      '<p class="prov">Score: <a href="data/motion/' + esc(file) + '">' + esc(file) + "</a>. Pictures: " +
+      '<p class="prov">Score: <a href="data/motion/' + esc(file) + '.gz">' + esc(file) + "</a> (gzipped). Pictures: " +
       ((sc.pictures || {}).file || []).map(function (p) { var j = "/Content/" + String(p).replace(/^\.\//, "").replace(/\.png$/, ".json"); return '<a class="mono" href="' + link(j) + '">' + esc(baseName(j)) + " layout</a>"; }).join(", ") + "</p>";
     var stage = new Stage(document.getElementById("mstage")), move = sc.moves[0], t = 0, alive = true;
     var node = { anchor: [0.5, 0.5], blend: null };
@@ -639,7 +891,7 @@
         return '<tr><td class="mono">' + esc(p.name) + '</td><td class="num">' + p.at.join(", ") + '</td><td class="num">' + p.size.join("×") + "</td><td>" + (p.turned ? "yes" : "") +
           '</td><td class="num">' + (p.trim ? esc(p.trim.x + ", " + p.trim.y + " " + p.trim.w + "×" + p.trim.h + " of " + (p.full || {}).w + "×" + (p.full || {}).h) : "") + "</td></tr>";
       }).join("") + "</table></div>" +
-      '<p class="prov">Score: <a href="data/motion/' + esc(file) + '">' + esc(file) + "</a>.</p>";
+      '<p class="prov">Score: <a href="data/motion/' + esc(file) + '.gz">' + esc(file) + "</a> (gzipped).</p>";
     var c = document.getElementById("mstage"), stage = new Stage(c);
     stage.fit([0, 0, W || 1, Hh || 1]);
     stage.clear();
@@ -905,6 +1157,50 @@
     }).join("");
   }
 
+  // a player skill's animation (ab/ability/<id>/...): crumbs back to the skill, and every file of the animation one tap
+  // away (its phases in play order, then the particle files), from data/skills/anim/<id>.json
+  var PHASE_ORDER = ["launch", "shot", "hit", "land", "return", "back"];
+  function phaseRank(f) {
+    var n = f.replace(/^\d+_/, "");
+    for (var i = 0; i < PHASE_ORDER.length; i++) if (n.indexOf(PHASE_ORDER[i]) === 0) return i;
+    return PHASE_ORDER.length;
+  }
+  function skillContext(app, rest) {
+    var m = /^ab\/ability\/(\d+)\/(.+?)(\.json)?$/.exec(rest);
+    if (!m) return;
+    var anim = m[1], current = rest.split("/").pop();
+    H.load("skills/anim/" + anim + ".json").then(function (a) {
+      var crumbsEl = app.querySelector(".crumbs"), h1 = app.querySelector("h1");
+      if (!crumbsEl || !h1) return;
+      var sk = a.skills, one = sk.length === 1 ? sk[0] : null;
+      var trail = [["#/skills/" + sk[0].kind, "Player skills: " + sk[0].label]];
+      if (one) trail.push(["#/skills/" + one.kind + "/" + encodeURIComponent(one.owner), one.owner], [null, one.name]);
+      else trail.push([null, sk.length + " skills"]);
+      trail.push([null, current.replace(/\.json$/, "")]);
+      crumbsEl.outerHTML = H.crumbs(trail);
+      var files = a.files.slice().sort(function (x, y) {
+        var px = /^pb_/.test(x), py = /^pb_/.test(y);
+        return px !== py ? (px ? 1 : -1) : (phaseRank(x) - phaseRank(y)) || (x < y ? -1 : 1);
+      });
+      function chip(f) {
+        var on = f + (/\.json$/.test(f) ? "" : ".json") === current || f === current;
+        return '<a class="chip' + (on ? " on" : "") + '" href="' + link("/Content/lang/ab/ability/" + anim + "/" + f) + '">' + H.esc(f.replace(/\.json$/, "")) + "</a>";
+      }
+      var phases = files.filter(function (f) { return !/^pb_/.test(f); }), parts = files.filter(function (f) { return /^pb_/.test(f); });
+      var used = sk.slice(0, 12).map(function (x) {
+        return H.esc(x.name) + ' <span class="muted">(' + H.esc(x.owner) + (x.tier ? ", " + H.esc(x.tier) : "") + ")</span>";
+      }).join(" · ") + (sk.length > 12 ? " · +" + (sk.length - 12) + " more" : "");
+      var bar = document.createElement("div");
+      bar.className = "skillctx";
+      bar.innerHTML = '<div class="small">' + (one ? "Animation " + H.esc(anim) + " of <b>" + H.esc(one.name) + "</b> (" + H.esc(one.owner) + (one.tier ? ", " + H.esc(one.tier) : "") + ")"
+        : "Animation " + H.esc(anim) + ", used by " + used) + "</div>" +
+        '<div class="histfilter">' + phases.map(chip).join("") + "</div>" +
+        (parts.length ? '<details' + (/^pb_/.test(current) ? " open" : "") + '><summary class="small muted">' + parts.length + " particle file" + (parts.length === 1 ? "" : "s") +
+          '</summary><div class="histfilter">' + parts.map(chip).join("") + "</div></details>" : "");
+      h1.parentNode.insertBefore(bar, h1.nextSibling);
+    }, function () {});
+  }
+
   window.Motion = {
     stage: stageEncounter, map: dungeonMap, scoreFile: scoreFile,
     sounds: function (list, helpers) { if (!H) H = helpers; return soundList(list); },
@@ -916,9 +1212,11 @@
         if (sc.kind === "scene") scenePage(app, sc, rest);
         else if (sc.kind === "flipbook") flipbookPage(app, sc, rest);
         else sheetPage(app, sc, rest);
+        skillContext(app, rest);
       }).catch(function () {
         app.innerHTML = H.crumbs([["#/motion", "Motion library"], [null, rest]]) + "<h1>Not held</h1><p class=\"muted\">No score for <span class=\"mono\">" + H.esc(rest) +
           "</span>: the archive doesn’t hold that file yet.</p>";
+        skillContext(app, rest);
       });
     }
   };

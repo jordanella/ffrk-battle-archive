@@ -25,7 +25,8 @@ Each level of the browser narrows down: **event type → category → location �
   - **AI:** its logic as flowcharts.
   - **Write-up:** a summary in the notation players used for boss write-ups.
   - **Animation:** the animation files it uses, the animations each contains, and the sound effects each one plays.
-- **Motion library** (`#/motion`). Every animation file the battles use, rewritten as a **motion score**: a documented, picture-free format. The site plays each score as moving boxes, with a timeline, event markers and a dope sheet.
+- **Player skills** (`#/skills`). Soul breaks, burst and brave commands, abilities and magicite skills, by realm and character. Each links to its animation's phases (launch, shot, hit …) in the motion player.
+- **Motion library** (`#/motion`). Every animation file the battles and the player skills use, rewritten as a **motion score**: a documented, picture-free format. The site plays each score as moving boxes, with a timeline, event markers and a dope sheet.
 - **Capture wish-list** (`#/wishlist`). What a capture would add: story battles whose rounds haven't been captured, AI scripts no archive holds, and any game files the battles name that are missing from this collection.
 
 Every record carries a **provenance badge**:
@@ -45,9 +46,10 @@ The site has no build step and no server: it is static files, and each page fetc
 | first visit | `data/index.json` | ~130 KB |
 | an encounter | `data/battles/<id>.json` | ~3 KB |
 | a staged round, or a motion player page | the motion scores it draws, one file each | ~1 KB each, rarely over 200 KB |
+| player skills | `data/skills/<kind>.json` | 100–400 KB |
 | an AI chart | `data/ai/<id>.json` | under 1 KB |
 
-GitHub Pages compresses everything it sends, so these sizes are what visitors download. Nobody downloads the whole archive to look at one battle. Cloning the repository does fetch everything: about 330 MB on disk, much less over the wire.
+GitHub Pages compresses everything it sends, so these sizes are what visitors download. Motion scores are stored gzipped (`<score>.json.gz`, about an eighth of their size; GitHub Pages caps a site at 1 GB) and the page inflates each one as it loads it. Nobody downloads the whole archive to look at one battle. Cloning the repository does fetch everything: about 170 MB on disk, much less over the wire.
 
 ## The data, for re-use
 
@@ -60,7 +62,8 @@ All of it is plain JSON under `data/`:
 | `ai/<ai id>.json` | one AI script as flowchart data |
 | `enemies.json` | enemy name → the battles it appears in |
 | `motion/index.json` | every motion score: source path, kind, counts |
-| `motion/<game path>.json` | one motion score |
+| `motion/<game path>.json.gz` | one motion score, gzipped JSON |
+| `skills/index.json`, `skills/<kind>.json` | player skills by kind: name, owner, realm, tier, ability id, animation id and its phase files |
 | `wishlist.json` | what is still to be captured: uncaptured battles by dungeon, missing AI scripts, missing game files |
 
 ## Run it locally
@@ -77,7 +80,8 @@ The site needs to be served over HTTP; opening `index.html` straight from disk w
 - The r/FFRecordKeeper wiki's dungeon pages: https://www.reddit.com/r/FFRecordKeeper/wiki/index/dungeons/
 - Players' public boss write-ups on r/FFRecordKeeper. Each rebuilt battle names the post and section it came from.
 - The recordpeeker project's 2015 captures: https://github.com/mdbarney/recordpeeker
-- The Japanese fan wiki at gamematome, for post-Global enemy lineups: https://xn--ffrk-8i9hs14f.gamematome.jp/game/780/wiki/
+- The Japanese wiki at gamematome, for post-Global enemy lineups: https://xn--ffrk-8i9hs14f.gamematome.jp/game/780/wiki/
+- Public spreadsheets, for the player skills: a datamined sheet of skill definitions (names, owners, ability and animation ids): https://docs.google.com/spreadsheets/d/1NrrlNJKeStKD4qmD-liAPg5Ow6wzMGWpBTa2ycMPYNs, and a database sheet for realms and tiers: https://docs.google.com/spreadsheets/d/1f8OJIQhpycljDQ8QNDk_va1GJ1u7RVoMaNjFcHH0LKk
 
 ## Contributing
 

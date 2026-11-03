@@ -1,0 +1,3 @@
+# the exporter's working folders (tools/browser/export.py writes motion scores there, then swaps them in)
+data/motion.new/
+data/motion.old/
